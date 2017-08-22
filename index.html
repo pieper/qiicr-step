@@ -43,7 +43,7 @@
     let step; // exists in window context for access from developer console
     let dc0;
     let dc0seg;
-    let tcia = new TCIA();
+    let tcia;
 
     document.addEventListener("DOMContentLoaded", event => {
 
@@ -57,8 +57,21 @@
         document.getElementById('noWebGLAlert').remove();
       }
 
+      //
+      // mouse controls and user interface
+      //
       step.controls = new Controls();
       step.controls.activate({});
+      step.ui = new qiicrStepUI({
+        bottomBar: {
+          onOrientationSelected: (orientation) => {
+            step.view.slice({plane: orientation});
+            step.uniforms.sliceMode.value = 1;
+            step.renderer.requestRender(step.view);
+          }
+        }
+      });
+      step.ui.progress = "Loading...";
 
       //
       // parse url parameters
@@ -75,7 +88,11 @@
       //
       dc0seg = new DICOMZero();
       dc0 = new DICOMZero();
-      tcia = new TCIA();
+      tcia = new TCIA({
+        progressCallback: (progressEvent) => {
+          step.ui.progress = `${(progressEvent.loaded/1024/1024).toFixed(2)} MB so far...`;
+        }
+      });
 
       tcia.images(seriesUID).then(arrayBuffer => {
         dc0seg.extractFromZipArrayBuffer(arrayBuffer, function() {
@@ -90,10 +107,10 @@
           }
 
           console.log(multiframe);
-          let dcmioMultiframe = DCMJSToDCMIO(multiframe);
-          console.log(dcmioMultiframe);
+          dc0seg.dcmioMultiframe = DCMJSToDCMIO(multiframe);
+          console.log(dc0seg.dcmioMultiframe);
 
-          let fields = Field.fromDataset(dcmioMultiframe);
+          let fields = Field.fromDataset(dc0seg.dcmioMultiframe);
 
           step.renderer.inputFields.push(...fields);
           step.renderer.updateProgram();
@@ -109,12 +126,40 @@
           });
           step.renderer.requestRender(step.view);
 
+          let panelOptions = {
+            subject: dc0seg.dcmioMultiframe.PatientID,
+            seriesDescription: dc0seg.dcmioMultiframe.SeriesDescription,
+            onSegmentVisibilityChanged: (segmentNumber, visibility) => {
+              step.renderer.inputFields[segmentNumber-1].visible = Number(visibility);
+              step.renderer.requestRender();
+            },
+            onSegmentClicked: (segmentNumber) => {
+              let field = step.renderer.inputFields[segmentNumber-1];
+              console.log(`TODO: scroll to ${field.center}`);
+              //step.renderer.view.look({at: field.center});
+              step.renderer.requestRender();
+            },
+            segments: []
+          };
+          dc0seg.dcmioMultiframe.Segment.forEach(segment => {
+            let rgb = DCMJS.data.Colors.dicomlab2RGB(segment.RecommendedDisplayCIELabValue);
+            rgb = rgb.map(e => Math.round(e*255).toString(16));
+            let hexColor = `#${rgb[0]}${rgb[1]}${rgb[2]}`;
+            panelOptions.segments.push({
+              segmentNumber: segment.SegmentNumber,
+              label: `${segment.SegmentLabel} (${segment.AnatomicRegion.CodeMeaning})`,
+              color: hexColor,
+            });
+          });
+          console.log(panelOptions);
+          step.ui.addLeftPanel(panelOptions);
+
           //
           // get the referenced series
           // (TODO: factor out redundancy)
           // (TODO: add progress)
           //
-          let referencedSeriesUID = dcmioMultiframe.ReferencedSeries.SeriesInstance;
+          let referencedSeriesUID = dc0seg.dcmioMultiframe.ReferencedSeries.SeriesInstance;
           tcia.images(referencedSeriesUID).then(arrayBuffer => {
             dc0.extractFromZipArrayBuffer(arrayBuffer, function() {
               dc0.datasets.sort(function(a,b) {
@@ -127,14 +172,13 @@
                 console.log(datasets);
               }
 
-              console.log(multiframe);
-              let dcmioMultiframe = DCMJSToDCMIO(multiframe);
-              console.log(dcmioMultiframe);
+              dc0.dcmioMultiframe = DCMJSToDCMIO(multiframe);
 
-              let fields = Field.fromDataset(dcmioMultiframe);
-
+              let fields = Field.fromDataset(dc0.dcmioMultiframe);
               step.renderer.inputFields.push(...fields);
               step.renderer.updateProgram();
+              let field = fields[0];
+              step.renderer.view.look({at: field.center, bounds: field.bounds});
               step.renderer.requestRender(step.view);
             });
           });
@@ -156,7 +200,12 @@
       </p>
     </div>
 
+
+    <div id='leftPanel' class='qiicrStepUIPanel'></div>
+
     <canvas id="renderCanvas"></canvas>
+
+    <div id='bottomBar' class='qiicrStepUIPanel'></div>
 
   </body>
 </html>
