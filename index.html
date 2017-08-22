@@ -28,17 +28,21 @@
     <script type="text/javascript" src="https://rawgit.com/pieper/sites/gh-pages/step/renderer.js"></script>
     <script type="text/javascript" src="https://rawgit.com/pieper/sites/gh-pages/step/controls.js"></script>
 
-    <!-- Code -->
+    <!-- DCMJSToDCMIO -->
     <script type="text/javascript" src="./DCMJSToDCMIO.js"></script>
+
+    <!-- Code -->
     <script type="text/javascript" src="./step.js"></script>
     <script type="text/javascript" src="./ui.js"></script>
+
 
 
     <!-- main logic -->
     <script>
     
     let step; // exists in window context for access from developer console
-    let dc0 = new DICOMZero();
+    let dc0;
+    let dc0seg;
     let tcia = new TCIA();
 
     document.addEventListener("DOMContentLoaded", event => {
@@ -49,9 +53,12 @@
       let canvas = document.querySelector('#renderCanvas');
       let gl = canvas.getContext('webgl2');
       if (gl) {
-        document.getElementById('noWebGLAlert').remove();
         step = new STEP(canvas, gl);
+        document.getElementById('noWebGLAlert').remove();
       }
+
+      step.controls = new Controls();
+      step.controls.activate({});
 
       //
       // parse url parameters
@@ -59,21 +66,24 @@
       let urlSearchParams = new URLSearchParams(window.location.search.substring(1));
       let seriesUID = urlSearchParams.get('seriesUID');
       // use a default if none specified
-      seriesUID = seriesUID || "1.3.6.1.4.1.14519.5.2.1.1706.4001.224456696643192351722858299392";
+      // MR: "1.3.6.1.4.1.14519.5.2.1.1706.4001.224456696643192351722858299392";
+      // SEG:
+      seriesUID = seriesUID || '1.2.276.0.7230010.3.1.3.8323329.23970.1440002820.841605'
 
       //
       // initiate the transfer from TCIA
       //
+      dc0seg = new DICOMZero();
       dc0 = new DICOMZero();
       tcia = new TCIA();
 
       tcia.images(seriesUID).then(arrayBuffer => {
-        dc0.extractFromZipArrayBuffer(arrayBuffer, function() {
-          dc0.datasets.sort(function(a,b) {
+        dc0seg.extractFromZipArrayBuffer(arrayBuffer, function() {
+          dc0seg.datasets.sort(function(a,b) {
             return (Number(a.InstanceNumber)-Number(b.InstanceNumber));
           });
 
-          let multiframe = DCMJS.normalizers.Normalizer.normalizeToDataset(dc0.datasets);
+          let multiframe = DCMJS.normalizers.Normalizer.normalizeToDataset(dc0seg.datasets);
           if (!multiframe) {
             console.error('Could not form normalized dataset from datasets');
             console.log(datasets);
@@ -90,7 +100,7 @@
           let field = fields[0];
           step.renderer.view.look({at: field.center, bounds: field.bounds});
           if (!step.options.newVolumeThreeD) {
-            step.view.slice({plane: "sagittal", offset: 0.5, thickness: 1});
+            step.view.slice({plane: "axial", offset: 0.5, thickness: 1});
             step.uniforms.sliceMode.value = 1;
           }
           let lightOffset = [200, -200, 400];
@@ -98,10 +108,38 @@
             step.uniforms.pointLight.value[index] = step.view.viewPoint[index] + lightOffset[index];
           });
           step.renderer.requestRender(step.view);
+
+          //
+          // get the referenced series
+          // (TODO: factor out redundancy)
+          // (TODO: add progress)
+          //
+          let referencedSeriesUID = dcmioMultiframe.ReferencedSeries.SeriesInstance;
+          tcia.images(referencedSeriesUID).then(arrayBuffer => {
+            dc0.extractFromZipArrayBuffer(arrayBuffer, function() {
+              dc0.datasets.sort(function(a,b) {
+                return (Number(a.InstanceNumber)-Number(b.InstanceNumber));
+              });
+
+              let multiframe = DCMJS.normalizers.Normalizer.normalizeToDataset(dc0.datasets);
+              if (!multiframe) {
+                console.error('Could not form normalized dataset from datasets');
+                console.log(datasets);
+              }
+
+              console.log(multiframe);
+              let dcmioMultiframe = DCMJSToDCMIO(multiframe);
+              console.log(dcmioMultiframe);
+
+              let fields = Field.fromDataset(dcmioMultiframe);
+
+              step.renderer.inputFields.push(...fields);
+              step.renderer.updateProgram();
+              step.renderer.requestRender(step.view);
+            });
+          });
         });
       });
-
-
     });
 
     </script>

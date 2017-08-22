@@ -41,3 +41,6 @@ function DCMJSToDCMIO(dataset) {
   }
   return(dcmioDataset);
 }
+
+// some dcmio classes are global where the DCMJS ones are in the namespace
+let Colors = DCMJS.data.Colors;
